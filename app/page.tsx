@@ -14,7 +14,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 const TMDB_API_KEY = '8e8b5ada357ef6f33a40b19978fbfda3';
 
 // BURAYA İSTEDİĞİNİZ ORTAK ŞİFREYİ YAZIN
-const ACCESS_PASSWORD = "ortaksinema2026"; 
+const ACCESS_PASSWORD = "hayatımınanlamı"; 
 
 // --- TİP TANIMLAMALARI ---
 interface Show {
