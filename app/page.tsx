@@ -13,6 +13,9 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const TMDB_API_KEY = '8e8b5ada357ef6f33a40b19978fbfda3';
 
+// BURAYA İSTEDİĞİNİZ ORTAK ŞİFREYİ YAZIN
+const ACCESS_PASSWORD = "ortaksinema2026"; 
+
 // --- TİP TANIMLAMALARI ---
 interface Show {
   id: number;
@@ -41,6 +44,11 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [mounted, setMounted] = useState(false);
 
+  // --- GÜVENLİK STATE'LERİ ---
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [passwordError, setPasswordError] = useState(false);
+
   // Arama Eyaletleri (States)
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<TMDBResult[]>([]);
@@ -48,8 +56,31 @@ export default function Dashboard() {
 
   useEffect(() => {
     setMounted(true);
-    verileriGetir();
+    
+    // Tarayıcıda daha önce giriş yapılmış mı kontrol et
+    const authStatus = localStorage.getItem('tvtime_authenticated');
+    if (authStatus === 'true') {
+      setIsAuthenticated(true);
+      verileriGetir();
+    } else {
+      setLoading(false); // Şifre ekranı için loading'i kapat
+    }
   }, []);
+
+  // Şifre Kontrol Fonksiyonu
+  const handlePasswordSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    
+    if (passwordInput === ACCESS_PASSWORD) {
+      localStorage.setItem('tvtime_authenticated', 'true');
+      setIsAuthenticated(true);
+      setPasswordError(false);
+      verileriGetir(); // Şifre doğruysa verileri çekmeye başla
+    } else {
+      setPasswordError(true);
+      setPasswordInput('');
+    }
+  };
 
   // Supabase'den Kullanıcı Dizilerini Çekme
   const verileriGetir = async () => {
@@ -119,7 +150,6 @@ export default function Dashboard() {
   // Listeye Yeni Dizi Ekleme (Supabase)
   const listeyeEkle = async (tmdbShow: TMDBResult) => {
     try {
-      // 1. Önce dizinin genel bilgilerini 'shows' tablosuna kaydet (Yoksa ekler)
       const { error: showErr } = await supabase
         .from('shows')
         .upsert({
@@ -130,7 +160,6 @@ export default function Dashboard() {
 
       if (showErr) throw showErr;
 
-      // 2. Kullanıcının takibine ekle
       const { error: userShowErr } = await supabase
         .from('user_shows')
         .insert({
@@ -143,20 +172,18 @@ export default function Dashboard() {
       if (userShowErr) throw userShowErr;
 
       alert(`${tmdbShow.name} başarıyla listene eklendi!`);
-      verileriGetir(); // Listeyi yenile
-      setCurrentTab('continuing'); // Ana sekmeye dön
+      verileriGetir();
+      setCurrentTab('continuing');
     } catch (err: any) {
       console.error("Ekleme hatası:", err.message);
       alert("Dizi eklenirken bir hata oluştu.");
     }
   };
 
-  // Yardımcı Veri Okuyucular
   const getEpisode = (item: UserShow) => Number(item[DB_EPISODE_COLUMN] || 0);
   const getSeason = (item: UserShow) => Number(item[DB_SEASON_COLUMN] || 0);
   const getShowInfo = (item: UserShow) => Array.isArray(item.shows) ? item.shows[0] : item.shows;
 
-  // İstatistikler
   const toplamBolum = allData.reduce((acc, item) => acc + getEpisode(item), 0);
   const toplamSaat = Math.round((toplamBolum * 45) / 60);
   const toplamGun = (toplamSaat / 24).toFixed(1);
@@ -165,8 +192,44 @@ export default function Dashboard() {
   const upToDateCount = allData.filter(item => item.status === 'up_to_date').length;
   const filtrelenmisData = allData.filter(item => item.status === currentTab);
 
-  if (!mounted) return null; // Hydration koruması
+  if (!mounted) return null;
 
+  // --- EĞER GİRİŞ YAPILMADIYSA ŞİFRE EKRANINI GÖSTER ---
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-[#141414] text-white flex flex-col justify-center items-center px-4 font-sans selection:bg-[#e50914]">
+        <form onSubmit={handlePasswordSubmit} className="w-full max-w-sm bg-[#1a1a1a] border border-[#262626] rounded-2xl p-8 shadow-2xl text-center">
+          <h2 className="text-[#f5c518] text-2xl font-black tracking-wider mb-2">MY TV TIME</h2>
+          <p className="text-gray-400 text-xs uppercase tracking-widest font-bold mb-6">Özel Alan 🎬</p>
+          
+          <div className="flex flex-col gap-3">
+            <input
+              type="password"
+              placeholder="Giriş Şifresi"
+              value={passwordInput}
+              onChange={(e) => setPasswordInput(e.target.value)}
+              className="w-full bg-[#262626] border border-[#3a3a3a] rounded-xl px-4 py-3 text-sm text-center focus:outline-none focus:border-[#f5c518] text-white transition-colors"
+              autoFocus
+            />
+            <button
+              type="submit"
+              className="w-full py-3 bg-[#e50914] hover:bg-[#b80710] text-white font-bold text-sm rounded-xl transition-all active:scale-98 shadow-md"
+            >
+              Giriş Yap
+            </button>
+          </div>
+
+          {passwordError && (
+            <p className="text-red-500 text-xs font-bold mt-4 animate-pulse">
+              Hatalı şifre! Tekrar deneyin. 🍿
+            </p>
+          )}
+        </form>
+      </div>
+    );
+  }
+
+  // --- GİRİŞ BAŞARILIYSA ASIL ARAYÜZÜNÜ GÖSTER ---
   return (
     <div className="min-h-screen bg-[#141414] text-[#e0e0e0] font-sans pb-16 selection:bg-[#f5c518] selection:text-black">
       {/* Header */}
@@ -223,7 +286,7 @@ export default function Dashboard() {
           </button>
         </div>
 
-        {/* --- 1. ARAMA SEKME İÇERİĞİ --- */}
+        {/* --- ARAMA SEKME İÇERİĞİ --- */}
         {currentTab === 'search' ? (
           <div className="flex flex-col gap-4">
             <div className="relative">
@@ -276,7 +339,7 @@ export default function Dashboard() {
             )}
           </div>
         ) : (
-          /* --- 2. LİSTE SEKME İÇERİĞİ (ESKİ KODUN) --- */
+          /* --- LİSTE SEKME İÇERİĞİ --- */
           loading ? (
             <div className="flex flex-col items-center justify-center py-16 gap-3">
               <div className="w-8 h-8 border-4 border-[#262626] border-t-[#f5c518] rounded-full animate-spin"></div>
