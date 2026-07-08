@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
-// --- VERİTABANI VE API AYARLARI ---
+// --- VERİTABANI AYARLARI ---
 const DB_EPISODE_COLUMN = 'current_episode';
 const DB_SEASON_COLUMN = 'current_season';
 
@@ -12,13 +12,15 @@ const supabaseKey = 'sb_publishable_PGt2PZK22DOybLcNLHRpSA_Sd_0hDXJ';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 const TMDB_API_KEY = '8e8b5ada357ef6f33a40b19978fbfda3';
+
+// BURAYA İSTEDİĞİNİZ ORTAK ŞİFREYİ YAZIN
 const ACCESS_PASSWORD = "hayatımınanlamı"; 
 
+// --- TİP TANIMLAMALARI ---
 interface Show {
   id: number;
   title: string;
   poster_path: string;
-  runtime?: number; 
 }
 
 interface UserShow {
@@ -42,38 +44,45 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [mounted, setMounted] = useState(false);
 
+  // --- GÜVENLİK STATE'LERİ ---
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
 
+  // Arama Eyaletleri (States)
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<TMDBResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
 
   useEffect(() => {
     setMounted(true);
+    
+    // Tarayıcıda daha önce giriş yapılmış mı kontrol et
     const authStatus = localStorage.getItem('tvtime_authenticated');
     if (authStatus === 'true') {
       setIsAuthenticated(true);
       verileriGetir();
     } else {
-      setLoading(false);
+      setLoading(false); // Şifre ekranı için loading'i kapat
     }
   }, []);
 
+  // Şifre Kontrol Fonksiyonu
   const handlePasswordSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    
     if (passwordInput === ACCESS_PASSWORD) {
       localStorage.setItem('tvtime_authenticated', 'true');
       setIsAuthenticated(true);
       setPasswordError(false);
-      verileriGetir();
+      verileriGetir(); // Şifre doğruysa verileri çekmeye başla
     } else {
       setPasswordError(true);
       setPasswordInput('');
     }
   };
 
+  // Supabase'den Kullanıcı Dizilerini Çekme
   const verileriGetir = async () => {
     setLoading(true);
     try {
@@ -90,107 +99,110 @@ export default function Dashboard() {
     }
   };
 
-  // --- İŞLEM FONKSİYONLARI ---
-  const bolumGuncelle = async (showId: number, currentEp: number, miktar: number) => {
-    const yeniBolum = Math.max(0, currentEp + miktar);
-    setAllData(prev => prev.map(item => item.show_id === showId ? { ...item, [DB_EPISODE_COLUMN]: yeniBolum } : item));
-    await supabase.from('user_shows').update({ [DB_EPISODE_COLUMN]: yeniBolum }).eq('show_id', showId);
+  // Bölüm Artırma (Optimistic UI)
+  const bolumArtir = async (showId: number, currentEp: number) => {
+    const yeniBolum = currentEp + 1;
+    const previousData = [...allData];
+
+    setAllData(prev =>
+      prev.map(item => {
+        const d_id = Array.isArray(item.shows) ? item.shows[0]?.id : item.shows?.id;
+        if ((d_id || item.show_id) === showId) {
+          return { ...item, [DB_EPISODE_COLUMN]: yeniBolum };
+        }
+        return item;
+      })
+    );
+
+    try {
+      const { error } = await supabase
+        .from('user_shows')
+        .update({ [DB_EPISODE_COLUMN]: yeniBolum })
+        .eq('show_id', showId);
+
+      if (error) throw error;
+    } catch (error) {
+      console.error("Güncelleme hatası:", error);
+      setAllData(previousData);
+    }
   };
 
-  const sezonGuncelle = async (showId: number, currentSeas: number, miktar: number) => {
-    const yeniSezon = Math.max(1, currentSeas + miktar);
-    setAllData(prev => prev.map(item => item.show_id === showId ? { ...item, [DB_SEASON_COLUMN]: yeniSezon } : item));
-    await supabase.from('user_shows').update({ [DB_SEASON_COLUMN]: yeniSezon }).eq('show_id', showId);
-  };
-
-  const durumDegistir = async (showId: number, currentStatus: string) => {
-    const yeniDurum = currentStatus === 'continuing' ? 'up_to_date' : 'continuing';
-    setAllData(prev => prev.map(item => item.show_id === showId ? { ...item, status: yeniDurum } : item));
-    await supabase.from('user_shows').update({ status: yeniDurum }).eq('show_id', showId);
-  };
-
-  const diziyiSil = async (showId: number) => {
-    if (!confirm('Bu diziyi listenden tamamen silmek istediğine emin misin?')) return;
-    setAllData(prev => prev.filter(item => item.show_id !== showId));
-    await supabase.from('user_shows').delete().eq('show_id', showId);
-  };
-
-  // --- TMDB ARAMA VE EKLEME ---
+  // TMDB API üzerinden Canlı Dizi Arama
   const diziAra = async (query: string) => {
-    if (!query.trim()) return setSearchResults([]);
+    if (!query.trim()) {
+      setSearchResults([]);
+      return;
+    }
     setSearchLoading(true);
     try {
-      const res = await fetch(`https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(query)}&language=tr-TR`);
+      const res = await fetch(
+        `https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(query)}&language=tr-TR`
+      );
       const data = await res.json();
       setSearchResults(data.results || []);
+    } catch (err) {
+      console.error("TMDB arama hatası:", err);
     } finally {
       setSearchLoading(false);
     }
   };
 
+  // Listeye Yeni Dizi Ekleme (Supabase)
   const listeyeEkle = async (tmdbShow: TMDBResult) => {
     try {
-      // Dizinin ortalama bölüm süresini (runtime) al
-      const detailRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbShow.id}?api_key=${TMDB_API_KEY}&language=tr-TR`);
-      const detailData = await detailRes.json();
-      const runtime = detailData.episode_run_time?.[0] || 45; 
+      const { error: showErr } = await supabase
+        .from('shows')
+        .upsert({
+          id: tmdbShow.id,
+          title: tmdbShow.name,
+          poster_path: tmdbShow.poster_path
+        }, { onConflict: 'id' });
 
-      await supabase.from('shows').upsert({
-        id: tmdbShow.id,
-        title: tmdbShow.name,
-        poster_path: tmdbShow.poster_path,
-        runtime: runtime 
-      }, { onConflict: 'id' });
+      if (showErr) throw showErr;
 
-      await supabase.from('user_shows').insert({
-        show_id: tmdbShow.id,
-        status: 'continuing',
-        [DB_EPISODE_COLUMN]: 1,
-        [DB_SEASON_COLUMN]: 1
-      });
+      const { error: userShowErr } = await supabase
+        .from('user_shows')
+        .insert({
+          show_id: tmdbShow.id,
+          status: 'continuing',
+          [DB_EPISODE_COLUMN]: 1,
+          [DB_SEASON_COLUMN]: 1
+        });
 
-      alert(`${tmdbShow.name} eklendi!`);
+      if (userShowErr) throw userShowErr;
+
+      alert(`${tmdbShow.name} başarıyla listene eklendi!`);
       verileriGetir();
       setCurrentTab('continuing');
-    } catch (err) {
-      alert("Eklenirken hata oluştu.");
+    } catch (err: any) {
+      console.error("Ekleme hatası:", err.message);
+      alert("Dizi eklenirken bir hata oluştu.");
     }
   };
 
-  // --- İSTATİSTİK HESAPLAMALARI ---
   const getEpisode = (item: UserShow) => Number(item[DB_EPISODE_COLUMN] || 0);
   const getSeason = (item: UserShow) => Number(item[DB_SEASON_COLUMN] || 0);
   const getShowInfo = (item: UserShow) => Array.isArray(item.shows) ? item.shows[0] : item.shows;
 
   const toplamBolum = allData.reduce((acc, item) => acc + getEpisode(item), 0);
-  const toplamDizi = allData.length;
+  const toplamSaat = Math.round((toplamBolum * 45) / 60);
+  const toplamGun = (toplamSaat / 24).toFixed(1);
+
   const continuingCount = allData.filter(item => item.status === 'continuing').length;
   const upToDateCount = allData.filter(item => item.status === 'up_to_date').length;
-  
-  // Toplam dakikayı hesapla
-  const toplamDakika = allData.reduce((acc, item) => {
-    const show = getShowInfo(item);
-    const runtime = show?.runtime || 45; 
-    return acc + (getEpisode(item) * runtime);
-  }, 0);
-
-  // TV Time tarzı zaman kırılımı (Ay, Gün, Saat)
-  const aylar = Math.floor(toplamDakika / (60 * 24 * 30));
-  const kalanDakikaAydan = toplamDakika % (60 * 24 * 30);
-  const gunler = Math.floor(kalanDakikaAydan / (60 * 24));
-  const kalanDakikaGunden = kalanDakikaAydan % (60 * 24);
-  const saatler = Math.floor(kalanDakikaGunden / 60);
-
   const filtrelenmisData = allData.filter(item => item.status === currentTab);
 
   if (!mounted) return null;
 
+  // --- EĞER GİRİŞ YAPILMADIYSA ŞİFRE EKRANINI GÖSTER ---
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-[#141414] text-white flex flex-col justify-center items-center px-4 font-sans selection:bg-[#e50914]">
         <form onSubmit={handlePasswordSubmit} className="w-full max-w-sm bg-[#1a1a1a] border border-[#262626] rounded-2xl p-8 shadow-2xl text-center">
           <h2 className="text-[#f5c518] text-2xl font-black tracking-wider mb-2">MY TV TIME</h2>
-          <div className="flex flex-col gap-3 mt-6">
+          <p className="text-gray-400 text-xs uppercase tracking-widest font-bold mb-6">Özel Alan 🎬</p>
+          
+          <div className="flex flex-col gap-3">
             <input
               type="password"
               placeholder="Giriş Şifresi"
@@ -199,73 +211,82 @@ export default function Dashboard() {
               className="w-full bg-[#262626] border border-[#3a3a3a] rounded-xl px-4 py-3 text-sm text-center focus:outline-none focus:border-[#f5c518] text-white transition-colors"
               autoFocus
             />
-            <button type="submit" className="w-full py-3 bg-[#e50914] hover:bg-[#b80710] text-white font-bold text-sm rounded-xl transition-all shadow-md">
+            <button
+              type="submit"
+              className="w-full py-3 bg-[#e50914] hover:bg-[#b80710] text-white font-bold text-sm rounded-xl transition-all active:scale-98 shadow-md"
+            >
               Giriş Yap
             </button>
           </div>
+
+          {passwordError && (
+            <p className="text-red-500 text-xs font-bold mt-4 animate-pulse">
+              Hatalı şifre! Tekrar deneyin. 🍿
+            </p>
+          )}
         </form>
       </div>
     );
   }
 
+  // --- GİRİŞ BAŞARILIYSA ASIL ARAYÜZÜNÜ GÖSTER ---
   return (
     <div className="min-h-screen bg-[#141414] text-[#e0e0e0] font-sans pb-16 selection:bg-[#f5c518] selection:text-black">
+      {/* Header */}
       <header className="bg-[#1a1a1a]/80 backdrop-blur-md border-b border-[#262626] sticky top-0 z-50">
         <div className="max-w-2xl mx-auto px-4 py-4 flex justify-between items-center">
           <h1 className="text-[#f5c518] text-xl font-black tracking-wider">MY TV TIME</h1>
-          <span className="text-xs bg-[#262626] text-emerald-400 px-3 py-1.5 rounded-full border border-[#3a3a3a] font-medium shadow-sm">
-            Veriler Devrede
+          <span className="text-xs bg-[#262626] text-emerald-400 px-3 py-1.5 rounded-full border border-[#3a3a3a] font-medium flex items-center gap-1.5 shadow-sm">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            Sistem Hazır
           </span>
         </div>
       </header>
 
       <main className="max-w-2xl mx-auto px-4 mt-6">
-        {/* GELİŞMİŞ İSTATİSTİK PANELİ */}
-        <div className="bg-gradient-to-b from-[#1a1a1a] to-[#141414] border border-[#262626] rounded-2xl p-5 mb-8 shadow-lg">
-          <p className="text-center text-xs text-gray-500 font-bold uppercase tracking-widest mb-4">TV Karşısında Geçirilen Zaman</p>
-          <div className="grid grid-cols-3 gap-2 text-center mb-6">
-            <div>
-              <p className="text-3xl font-black text-[#f5c518]">{loading ? '-' : aylar}</p>
-              <p className="text-[10px] text-gray-400 uppercase mt-1">Ay</p>
-            </div>
-            <div className="border-x border-[#262626]">
-              <p className="text-3xl font-black text-white">{loading ? '-' : gunler}</p>
-              <p className="text-[10px] text-gray-400 uppercase mt-1">Gün</p>
-            </div>
-            <div>
-              <p className="text-3xl font-black text-emerald-400">{loading ? '-' : saatler}</p>
-              <p className="text-[10px] text-gray-400 uppercase mt-1">Saat</p>
-            </div>
+        
+        {/* İstatistik Paneli */}
+        <div className="grid grid-cols-3 gap-4 bg-gradient-to-b from-[#1a1a1a] to-[#141414] border border-[#262626] rounded-2xl p-5 mb-8 text-center shadow-lg">
+          <div>
+            <p className="text-3xl font-black text-[#f5c518]">{loading ? '...' : toplamBolum}</p>
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mt-1">Bölüm</p>
           </div>
-          
-          <div className="grid grid-cols-3 gap-2 text-center pt-4 border-t border-[#262626]">
-            <div>
-              <p className="text-lg font-bold text-white">{toplamBolum}</p>
-              <p className="text-[10px] text-gray-500">İzlenen Bölüm</p>
-            </div>
-            <div>
-              <p className="text-lg font-bold text-white">{toplamDizi}</p>
-              <p className="text-[10px] text-gray-500">Toplam Dizi</p>
-            </div>
-            <div>
-              <p className="text-lg font-bold text-[#4ade80]">{upToDateCount}</p>
-              <p className="text-[10px] text-gray-500">Bitirilen Dizi</p>
-            </div>
+          <div className="border-x border-[#262626]">
+            <p className="text-3xl font-black text-white">{loading ? '...' : toplamSaat}</p>
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mt-1">Saat</p>
+          </div>
+          <div>
+            <p className="text-3xl font-black text-emerald-400">{loading ? '...' : toplamGun}</p>
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mt-1">Gün</p>
           </div>
         </div>
 
+        {/* Tab Menü */}
         <div className="flex gap-6 border-b border-[#262626] mb-6 text-sm font-medium">
-          <button onClick={() => setCurrentTab('continuing')} className={`pb-3 transition-all ${currentTab === 'continuing' ? 'text-[#f5c518] border-b-2 border-[#f5c518] font-bold' : 'text-gray-500'}`}>
+          <button
+            onClick={() => setCurrentTab('continuing')}
+            className={`pb-3 cursor-pointer transition-all ${currentTab === 'continuing' ? 'text-[#f5c518] border-b-2 border-[#f5c518] font-bold' : 'text-gray-500'}`}
+          >
             İzliyorum ({continuingCount})
           </button>
-          <button onClick={() => setCurrentTab('up_to_date')} className={`pb-3 transition-all ${currentTab === 'up_to_date' ? 'text-[#f5c518] border-b-2 border-[#f5c518] font-bold' : 'text-gray-500'}`}>
+          <button
+            onClick={() => setCurrentTab('up_to_date')}
+            className={`pb-3 cursor-pointer transition-all ${currentTab === 'up_to_date' ? 'text-[#f5c518] border-b-2 border-[#f5c518] font-bold' : 'text-gray-500'}`}
+          >
             Bitenler ({upToDateCount})
           </button>
-          <button onClick={() => setCurrentTab('search')} className={`pb-3 transition-all ml-auto ${currentTab === 'search' ? 'text-[#4ade80] border-b-2 border-[#4ade80] font-bold' : 'text-gray-500 hover:text-gray-300'}`}>
+          <button
+            onClick={() => setCurrentTab('search')}
+            className={`pb-3 cursor-pointer transition-all ml-auto ${currentTab === 'search' ? 'text-[#4ade80] border-b-2 border-[#4ade80] font-bold' : 'text-gray-500 hover:text-gray-300'}`}
+          >
             🔍 Dizi Ekle
           </button>
         </div>
 
+        {/* --- ARAMA SEKME İÇERİĞİ --- */}
         {currentTab === 'search' ? (
           <div className="flex flex-col gap-4">
             <div className="relative">
@@ -275,68 +296,107 @@ export default function Dashboard() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && diziAra(searchQuery)}
-                className="w-full bg-[#1a1a1a] border border-[#262626] rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-[#4ade80] text-white"
+                className="w-full bg-[#1a1a1a] border border-[#262626] rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-[#4ade80] text-white transition-colors"
               />
-              <button onClick={() => diziAra(searchQuery)} className="absolute right-3 top-2.5 bg-[#262626] hover:bg-[#3a3a3a] text-xs px-3 py-1.5 rounded-lg border border-[#3a3a3a] text-gray-300">Ara</button>
+              <button 
+                onClick={() => diziAra(searchQuery)}
+                className="absolute right-3 top-2.5 bg-[#262626] hover:bg-[#3a3a3a] text-xs px-3 py-1.5 rounded-lg border border-[#3a3a3a] text-gray-300"
+              >
+                Ara
+              </button>
             </div>
 
             {searchLoading ? (
-              <div className="text-center py-8 text-gray-500 text-sm">Aranıyor...</div>
-            ) : searchResults.map((show) => (
-              <div key={show.id} className="bg-[#1a1a1a] border border-[#262626] rounded-xl p-3 flex gap-4 items-center justify-between">
-                <div className="flex gap-3 items-center">
-                  <img src={show.poster_path ? `https://image.tmdb.org/t/p/w200${show.poster_path}` : 'https://via.placeholder.com/200x300/1a1a1a/666666?text=Yok'} alt={show.name} className="w-12 h-18 object-cover rounded-md" />
-                  <div>
-                    <h4 className="text-white font-bold text-sm">{show.name}</h4>
-                    <p className="text-xs text-gray-500">{show.first_air_date?.split('-')[0]}</p>
-                  </div>
-                </div>
-                <button onClick={() => listeyeEkle(show)} className="px-3 py-1.5 bg-[#4ade80]/10 text-[#4ade80] font-bold text-xs rounded-lg border border-[#4ade80]/20">+ Ekle</button>
+              <div className="text-center py-8 text-gray-500 text-sm">TMDB veritabanında aranıyor...</div>
+            ) : searchResults.length === 0 ? (
+              <div className="text-center py-12 bg-[#1a1a1a]/30 rounded-2xl border border-dashed border-[#262626] text-gray-500 text-sm">
+                Keşfetmek için yukarıdan bir dizi aratın.
               </div>
-            ))}
-          </div>
-        ) : (
-          <div className="flex flex-col gap-4">
-            {filtrelenmisData.map((item) => {
-              const show = getShowInfo(item);
-              const d_title = show?.title || "Bilinmeyen Dizi";
-              const imgUrl = show?.poster_path ? `https://image.tmdb.org/t/p/w200${show.poster_path}` : 'https://via.placeholder.com/200x300/1a1a1a/666666?text=Gorsel+Yok';
-
-              return (
-                <div key={item.show_id} className="bg-[#1a1a1a] border border-[#262626] rounded-xl p-3 flex gap-4 items-center shadow-md">
-                  <img src={imgUrl} alt={d_title} className="w-16 h-24 object-cover rounded-lg border border-[#262626]" />
-                  
-                  <div className="flex-1 py-1">
-                    <h3 className="text-white font-bold text-base truncate mb-2">{d_title}</h3>
-                    <div className="flex items-center gap-3">
-                      <div className="flex items-center bg-[#262626] rounded border border-[#3a3a3a]">
-                        <button onClick={() => sezonGuncelle(item.show_id, getSeason(item), -1)} className="px-2 py-0.5 text-xs text-gray-400">-</button>
-                        <span className="text-xs text-gray-200 font-bold">S{String(getSeason(item)).padStart(2, '0')}</span>
-                        <button onClick={() => sezonGuncelle(item.show_id, getSeason(item), 1)} className="px-2 py-0.5 text-xs text-gray-400">+</button>
-                      </div>
-                      <div className="flex items-center bg-[#262626] rounded border border-[#3a3a3a]">
-                        <button onClick={() => bolumGuncelle(item.show_id, getEpisode(item), -1)} className="px-2 py-0.5 text-xs text-gray-400">-</button>
-                        <span className="px-2 text-sm text-[#f5c518] font-black">B{getEpisode(item)}</span>
-                        <button onClick={() => bolumGuncelle(item.show_id, getEpisode(item), 1)} className="px-2 py-0.5 text-xs text-gray-400">+</button>
+            ) : (
+              <div className="grid grid-cols-1 gap-3">
+                {searchResults.map((show) => (
+                  <div key={show.id} className="bg-[#1a1a1a] border border-[#262626] rounded-xl p-3 flex gap-4 items-center justify-between">
+                    <div className="flex gap-3 items-center min-w-0">
+                      <img 
+                        src={show.poster_path ? `https://image.tmdb.org/t/p/w200${show.poster_path}` : 'https://via.placeholder.com/200x300/1a1a1a/666666?text=Yok'} 
+                        alt={show.name} 
+                        className="w-12 h-18 object-cover rounded-md bg-[#141414]"
+                      />
+                      <div className="min-w-0">
+                        <h4 className="text-white font-bold text-sm truncate">{show.name}</h4>
+                        <p className="text-xs text-gray-500 mt-0.5">{show.first_air_date ? show.first_air_date.split('-')[0] : 'Belirsiz'}</p>
                       </div>
                     </div>
-                  </div>
-
-                  <div className="flex flex-col gap-2 flex-shrink-0 items-end">
                     <button
-                      onClick={() => durumDegistir(item.show_id, item.status)}
-                      className={`px-3 py-1 text-xs font-bold rounded-md border ${item.status === 'continuing' ? 'bg-[#f5c518]/10 text-[#f5c518] border-[#f5c518]/20' : 'bg-[#4ade80]/10 text-[#4ade80] border-[#4ade80]/20'}`}
+                      onClick={() => listeyeEkle(show)}
+                      className="px-3 py-1.5 bg-[#4ade80]/10 hover:bg-[#4ade80] text-[#4ade80] hover:text-black font-bold text-xs rounded-lg border border-[#4ade80]/20 transition-all active:scale-95"
                     >
-                      {item.status === 'continuing' ? 'Bitir' : 'İzliyorum'}
-                    </button>
-                    <button onClick={() => diziyiSil(item.show_id)} className="px-3 py-1 text-xs font-bold rounded-md bg-red-500/10 text-red-500 border border-red-500/20">
-                      Sil
+                      + Takip Et
                     </button>
                   </div>
-                </div>
-              );
-            })}
+                ))}
+              </div>
+            )}
           </div>
+        ) : (
+          /* --- LİSTE SEKME İÇERİĞİ --- */
+          loading ? (
+            <div className="flex flex-col items-center justify-center py-16 gap-3">
+              <div className="w-8 h-8 border-4 border-[#262626] border-t-[#f5c518] rounded-full animate-spin"></div>
+              <span className="text-gray-500 text-sm">Arşiviniz Yükleniyor...</span>
+            </div>
+          ) : filtrelenmisData.length === 0 ? (
+            <div className="text-center py-16 bg-[#1a1a1a]/50 rounded-2xl border border-dashed border-[#262626]">
+              <p className="text-gray-400 text-sm">Bu listede henüz dizi yok.</p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-4">
+              {filtrelenmisData.map((item) => {
+                const show = getShowInfo(item);
+                const d_title = show?.title || "Bilinmeyen Dizi";
+                const d_id = show?.id || item.show_id;
+                const d_season = getSeason(item);
+                const d_episode = getEpisode(item);
+                
+                const imgUrl = show?.poster_path 
+                  ? `https://image.tmdb.org/t/p/w200${show.poster_path}` 
+                  : 'https://via.placeholder.com/200x300/1a1a1a/666666?text=Gorsel+Yok';
+
+                return (
+                  <div key={item.id || d_id} className="bg-[#1a1a1a] border border-[#262626] rounded-xl p-3 flex gap-4 items-center shadow-md hover:border-[#3a3a3a] transition-colors group">
+                    <img src={imgUrl} alt={d_title} className="w-16 h-24 object-cover rounded-lg border border-[#262626] flex-shrink-0 bg-[#141414]" loading="lazy" />
+                    
+                    <div className="flex-1 min-w-0 py-1">
+                      <h3 className="text-white font-bold text-base truncate mb-1.5 group-hover:text-[#f5c518] transition-colors">{d_title}</h3>
+                      <div className="flex items-center gap-2">
+                        <span className="bg-[#262626] px-2 py-0.5 rounded text-xs text-gray-300 font-medium">
+                          {d_season > 0 ? `S${String(d_season).padStart(2, '0')}` : 'S01'}
+                        </span>
+                        <span className="text-sm text-[#f5c518] font-bold">
+                          Bölüm {d_episode}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex-shrink-0 pr-1">
+                      {item.status === 'continuing' ? (
+                        <button
+                          onClick={() => bolumArtir(d_id, d_episode)}
+                          className="flex items-center gap-1.5 px-3 py-2 bg-[#262626] border border-[#3a3a3a] hover:bg-[#f5c518] hover:border-[#f5c518] hover:text-black rounded-lg text-white font-bold text-xs transition-all active:scale-95"
+                        >
+                          + Bölüm
+                        </button>
+                      ) : (
+                        <span className="flex items-center gap-1 text-[#4ade80] text-xs font-bold bg-[#4ade80]/10 px-3 py-2 rounded-lg border border-[#4ade80]/20">
+                          Bitti
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )
         )}
       </main>
     </div>
