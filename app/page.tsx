@@ -49,46 +49,45 @@ export default function Dashboard() {
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
 
-  // Arama Eyaletleri (States)
+  // Arama Eyaletleri
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<TMDBResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
 
+  // Aktif Menü Eyaleti (Mobilde / Webde ayarları açmak için)
+  const [activeMenuId, setActiveMenuId] = useState<number | null>(null);
+
   useEffect(() => {
     setMounted(true);
-    
-    // Tarayıcıda daha önce giriş yapılmış mı kontrol et
     const authStatus = localStorage.getItem('tvtime_authenticated');
     if (authStatus === 'true') {
       setIsAuthenticated(true);
       verileriGetir();
     } else {
-      setLoading(false); // Şifre ekranı için loading'i kapat
+      setLoading(false);
     }
   }, []);
 
-  // Şifre Kontrol Fonksiyonu
   const handlePasswordSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    
     if (passwordInput === ACCESS_PASSWORD) {
       localStorage.setItem('tvtime_authenticated', 'true');
       setIsAuthenticated(true);
       setPasswordError(false);
-      verileriGetir(); // Şifre doğruysa verileri çekmeye başla
+      verileriGetir();
     } else {
       setPasswordError(true);
       setPasswordInput('');
     }
   };
 
-  // Supabase'den Kullanıcı Dizilerini Çekme
   const verileriGetir = async () => {
     setLoading(true);
     try {
       const { data, error } = await supabase
         .from('user_shows')
-        .select(`*, shows (*)`);
+        .select(`*, shows (*)`)
+        .order('id', { ascending: false });
 
       if (error) throw error;
       setAllData(data || []);
@@ -99,7 +98,7 @@ export default function Dashboard() {
     }
   };
 
-  // Bölüm Artırma (Optimistic UI)
+  // 1. BÖLÜM ARTIRMA
   const bolumArtir = async (showId: number, currentEp: number) => {
     const yeniBolum = currentEp + 1;
     const previousData = [...allData];
@@ -127,7 +126,90 @@ export default function Dashboard() {
     }
   };
 
-  // TMDB API üzerinden Canlı Dizi Arama
+  // 2. DİZİYİ BİTİRME (TMDB'den Toplam Bölümü Çekme)
+  const diziyiBitir = async (showId: number) => {
+    // Önce kullanıcıya hızlıca hissettir (Optimistic UI)
+    setActiveMenuId(null);
+    
+    try {
+      // TMDB'den dizinin detaylarını al (toplam bölüm için)
+      const res = await fetch(`https://api.themoviedb.org/3/tv/${showId}?api_key=${TMDB_API_KEY}&language=tr-TR`);
+      const tmdbData = await res.json();
+      
+      const toplamBolum = tmdbData.number_of_episodes || 0;
+      const toplamSezon = tmdbData.number_of_seasons || 1;
+
+      // Supabase'i güncelle
+      const { error } = await supabase
+        .from('user_shows')
+        .update({ 
+          status: 'up_to_date',
+          [DB_EPISODE_COLUMN]: toplamBolum,
+          [DB_SEASON_COLUMN]: toplamSezon
+        })
+        .eq('show_id', showId);
+
+      if (error) throw error;
+
+      // Local State'i güncelle
+      setAllData(prev =>
+        prev.map(item => {
+          if (item.show_id === showId) {
+            return { ...item, status: 'up_to_date', [DB_EPISODE_COLUMN]: toplamBolum, [DB_SEASON_COLUMN]: toplamSezon };
+          }
+          return item;
+        })
+      );
+    } catch (error) {
+      console.error("Bitirme hatası:", error);
+      alert("Dizi bitirilirken bir hata oluştu.");
+    }
+  };
+
+  // 3. DİZİYİ GERİ AL (Tekrar İzliyorum listesine)
+  const diziyiGeriAl = async (showId: number) => {
+    setActiveMenuId(null);
+    try {
+      const { error } = await supabase
+        .from('user_shows')
+        .update({ status: 'continuing' })
+        .eq('show_id', showId);
+
+      if (error) throw error;
+
+      setAllData(prev =>
+        prev.map(item => {
+          if (item.show_id === showId) {
+            return { ...item, status: 'continuing' };
+          }
+          return item;
+        })
+      );
+    } catch (error) {
+      console.error("Geri alma hatası:", error);
+    }
+  };
+
+  // 4. DİZİYİ SİL
+  const diziyiSil = async (showId: number) => {
+    const onay = window.confirm("Bu diziyi listeden tamamen silmek istediğine emin misin?");
+    if (!onay) return;
+
+    setActiveMenuId(null);
+    try {
+      const { error } = await supabase
+        .from('user_shows')
+        .delete()
+        .eq('show_id', showId);
+
+      if (error) throw error;
+
+      setAllData(prev => prev.filter(item => item.show_id !== showId));
+    } catch (error) {
+      console.error("Silme hatası:", error);
+    }
+  };
+
   const diziAra = async (query: string) => {
     if (!query.trim()) {
       setSearchResults([]);
@@ -147,8 +229,14 @@ export default function Dashboard() {
     }
   };
 
-  // Listeye Yeni Dizi Ekleme (Supabase)
   const listeyeEkle = async (tmdbShow: TMDBResult) => {
+    // Zaten ekli mi kontrol et
+    const zatenEkli = allData.some(item => item.show_id === tmdbShow.id);
+    if (zatenEkli) {
+      alert("Bu dizi zaten listende var!");
+      return;
+    }
+
     try {
       const { error: showErr } = await supabase
         .from('shows')
@@ -165,15 +253,16 @@ export default function Dashboard() {
         .insert({
           show_id: tmdbShow.id,
           status: 'continuing',
-          [DB_EPISODE_COLUMN]: 1,
+          [DB_EPISODE_COLUMN]: 0, // Sıfırdan başlat
           [DB_SEASON_COLUMN]: 1
         });
 
       if (userShowErr) throw userShowErr;
 
-      alert(`${tmdbShow.name} başarıyla listene eklendi!`);
       verileriGetir();
       setCurrentTab('continuing');
+      setSearchQuery('');
+      setSearchResults([]);
     } catch (err: any) {
       console.error("Ekleme hatası:", err.message);
       alert("Dizi eklenirken bir hata oluştu.");
@@ -184,6 +273,7 @@ export default function Dashboard() {
   const getSeason = (item: UserShow) => Number(item[DB_SEASON_COLUMN] || 0);
   const getShowInfo = (item: UserShow) => Array.isArray(item.shows) ? item.shows[0] : item.shows;
 
+  // İSTATİSTİKLER - Biten dizilerin bölümleri de dahil edilir!
   const toplamBolum = allData.reduce((acc, item) => acc + getEpisode(item), 0);
   const toplamSaat = Math.round((toplamBolum * 45) / 60);
   const toplamGun = (toplamSaat / 24).toFixed(1);
@@ -194,7 +284,6 @@ export default function Dashboard() {
 
   if (!mounted) return null;
 
-  // --- EĞER GİRİŞ YAPILMADIYSA ŞİFRE EKRANINI GÖSTER ---
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-[#141414] text-white flex flex-col justify-center items-center px-4 font-sans selection:bg-[#e50914]">
@@ -229,10 +318,8 @@ export default function Dashboard() {
     );
   }
 
-  // --- GİRİŞ BAŞARILIYSA ASIL ARAYÜZÜNÜ GÖSTER ---
   return (
     <div className="min-h-screen bg-[#141414] text-[#e0e0e0] font-sans pb-16 selection:bg-[#f5c518] selection:text-black">
-      {/* Header */}
       <header className="bg-[#1a1a1a]/80 backdrop-blur-md border-b border-[#262626] sticky top-0 z-50">
         <div className="max-w-2xl mx-auto px-4 py-4 flex justify-between items-center">
           <h1 className="text-[#f5c518] text-xl font-black tracking-wider">MY TV TIME</h1>
@@ -286,7 +373,6 @@ export default function Dashboard() {
           </button>
         </div>
 
-        {/* --- ARAMA SEKME İÇERİĞİ --- */}
         {currentTab === 'search' ? (
           <div className="flex flex-col gap-4">
             <div className="relative">
@@ -339,7 +425,6 @@ export default function Dashboard() {
             )}
           </div>
         ) : (
-          /* --- LİSTE SEKME İÇERİĞİ --- */
           loading ? (
             <div className="flex flex-col items-center justify-center py-16 gap-3">
               <div className="w-8 h-8 border-4 border-[#262626] border-t-[#f5c518] rounded-full animate-spin"></div>
@@ -362,36 +447,73 @@ export default function Dashboard() {
                   ? `https://image.tmdb.org/t/p/w200${show.poster_path}` 
                   : 'https://via.placeholder.com/200x300/1a1a1a/666666?text=Gorsel+Yok';
 
+                const isMenuOpen = activeMenuId === d_id;
+
                 return (
-                  <div key={item.id || d_id} className="bg-[#1a1a1a] border border-[#262626] rounded-xl p-3 flex gap-4 items-center shadow-md hover:border-[#3a3a3a] transition-colors group">
+                  <div key={item.id || d_id} className="relative bg-[#1a1a1a] border border-[#262626] rounded-xl p-3 flex gap-4 items-center shadow-md hover:border-[#3a3a3a] transition-colors group">
                     <img src={imgUrl} alt={d_title} className="w-16 h-24 object-cover rounded-lg border border-[#262626] flex-shrink-0 bg-[#141414]" loading="lazy" />
                     
                     <div className="flex-1 min-w-0 py-1">
                       <h3 className="text-white font-bold text-base truncate mb-1.5 group-hover:text-[#f5c518] transition-colors">{d_title}</h3>
                       <div className="flex items-center gap-2">
-                        <span className="bg-[#262626] px-2 py-0.5 rounded text-xs text-gray-300 font-medium">
-                          {d_season > 0 ? `S${String(d_season).padStart(2, '0')}` : 'S01'}
-                        </span>
-                        <span className="text-sm text-[#f5c518] font-bold">
-                          Bölüm {d_episode}
-                        </span>
+                        {item.status === 'continuing' ? (
+                          <>
+                            <span className="bg-[#262626] px-2 py-0.5 rounded text-xs text-gray-300 font-medium">
+                              S{String(d_season).padStart(2, '0')}
+                            </span>
+                            <span className="text-sm text-[#f5c518] font-bold">
+                              Bölüm {d_episode}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-sm text-[#4ade80] font-bold">
+                            Tamamlandı ({d_episode} Bölüm)
+                          </span>
+                        )}
                       </div>
                     </div>
 
-                    <div className="flex-shrink-0 pr-1">
+                    {/* Sağ Taraf - Aksiyonlar */}
+                    <div className="flex flex-col gap-2 items-end flex-shrink-0 pr-1">
                       {item.status === 'continuing' ? (
                         <button
                           onClick={() => bolumArtir(d_id, d_episode)}
-                          className="flex items-center gap-1.5 px-3 py-2 bg-[#262626] border border-[#3a3a3a] hover:bg-[#f5c518] hover:border-[#f5c518] hover:text-black rounded-lg text-white font-bold text-xs transition-all active:scale-95"
+                          className="px-4 py-2 bg-[#262626] border border-[#3a3a3a] hover:bg-[#f5c518] hover:border-[#f5c518] hover:text-black rounded-lg text-white font-bold text-xs transition-all active:scale-95"
                         >
-                          + Bölüm
+                          + BÖLÜM
                         </button>
                       ) : (
                         <span className="flex items-center gap-1 text-[#4ade80] text-xs font-bold bg-[#4ade80]/10 px-3 py-2 rounded-lg border border-[#4ade80]/20">
                           Bitti
                         </span>
                       )}
+                      
+                      {/* Üç Nokta / Ayarlar Butonu */}
+                      <button 
+                        onClick={() => setActiveMenuId(isMenuOpen ? null : d_id)}
+                        className="text-gray-500 hover:text-white text-xs px-2 py-1 bg-[#262626] rounded border border-[#3a3a3a]"
+                      >
+                        ⚙️ Ayarlar
+                      </button>
                     </div>
+
+                    {/* Ayarlar Açılır Menüsü */}
+                    {isMenuOpen && (
+                      <div className="absolute right-4 top-14 bg-[#262626] border border-[#3a3a3a] rounded-lg shadow-2xl p-2 flex flex-col gap-1 z-10 min-w-[120px] animate-fade-in">
+                        {item.status === 'continuing' ? (
+                          <button onClick={() => diziyiBitir(d_id)} className="text-left px-3 py-2 text-xs font-bold text-[#4ade80] hover:bg-[#3a3a3a] rounded transition-colors">
+                            ✅ Bitirdim
+                          </button>
+                        ) : (
+                          <button onClick={() => diziyiGeriAl(d_id)} className="text-left px-3 py-2 text-xs font-bold text-white hover:bg-[#3a3a3a] rounded transition-colors">
+                            ↩️ Geri Al
+                          </button>
+                        )}
+                        <button onClick={() => diziyiSil(d_id)} className="text-left px-3 py-2 text-xs font-bold text-red-400 hover:bg-[#3a3a3a] rounded transition-colors">
+                          🗑️ Diziyi Sil
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
