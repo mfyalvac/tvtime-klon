@@ -12,15 +12,13 @@ const supabaseKey = 'sb_publishable_PGt2PZK22DOybLcNLHRpSA_Sd_0hDXJ';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 const TMDB_API_KEY = '8e8b5ada357ef6f33a40b19978fbfda3';
-
-// BURAYA İSTEDİĞİNİZ ORTAK ŞİFREYİ YAZIN
 const ACCESS_PASSWORD = "hayatımınanlamı"; 
 
-// --- TİP TANIMLAMALARI ---
 interface Show {
   id: number;
   title: string;
   poster_path: string;
+  runtime?: number; // Dinamik süre hesabı için yeni alan
 }
 
 interface UserShow {
@@ -44,45 +42,38 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [mounted, setMounted] = useState(false);
 
-  // --- GÜVENLİK STATE'LERİ ---
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
 
-  // Arama Eyaletleri (States)
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<TMDBResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
 
   useEffect(() => {
     setMounted(true);
-    
-    // Tarayıcıda daha önce giriş yapılmış mı kontrol et
     const authStatus = localStorage.getItem('tvtime_authenticated');
     if (authStatus === 'true') {
       setIsAuthenticated(true);
       verileriGetir();
     } else {
-      setLoading(false); // Şifre ekranı için loading'i kapat
+      setLoading(false);
     }
   }, []);
 
-  // Şifre Kontrol Fonksiyonu
   const handlePasswordSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    
     if (passwordInput === ACCESS_PASSWORD) {
       localStorage.setItem('tvtime_authenticated', 'true');
       setIsAuthenticated(true);
       setPasswordError(false);
-      verileriGetir(); // Şifre doğruysa verileri çekmeye başla
+      verileriGetir();
     } else {
       setPasswordError(true);
       setPasswordInput('');
     }
   };
 
-  // Supabase'den Kullanıcı Dizilerini Çekme
   const verileriGetir = async () => {
     setLoading(true);
     try {
@@ -94,14 +85,14 @@ export default function Dashboard() {
       setAllData(data || []);
     } catch (err: any) {
       console.error('Supabase hatası:', err.message);
-    } finally {
+    } campaigners {
       setLoading(false);
     }
   };
 
-  // Bölüm Artırma (Optimistic UI)
-  const bolumArtir = async (showId: number, currentEp: number) => {
-    const yeniBolum = currentEp + 1;
+  // Bölüm Artırma ve Azaltma Fonksiyonu (Dinamik)
+  const bolumGuncelle = async (showId: number, currentEp: number, miktar: number) => {
+    const yeniBolum = Math.max(0, currentEp + miktar);
     const previousData = [...allData];
 
     setAllData(prev =>
@@ -127,7 +118,62 @@ export default function Dashboard() {
     }
   };
 
-  // TMDB API üzerinden Canlı Dizi Arama
+  // Sezon Değiştirme Fonksiyonu
+  const sezonGuncelle = async (showId: number, currentSeas: number, miktar: number) => {
+    const yeniSezon = Math.max(1, currentSeas + miktar);
+    const previousData = [...allData];
+
+    setAllData(prev =>
+      prev.map(item => {
+        const d_id = Array.isArray(item.shows) ? item.shows[0]?.id : item.shows?.id;
+        if ((d_id || item.show_id) === showId) {
+          return { ...item, [DB_SEASON_COLUMN]: yeniSezon };
+        }
+        return item;
+      })
+    );
+
+    try {
+      const { error } = await supabase
+        .from('user_shows')
+        .update({ [DB_SEASON_COLUMN]: yeniSezon })
+        .eq('show_id', showId);
+
+      if (error) throw error;
+    } catch (error) {
+      console.error("Sezon güncelleme hatası:", error);
+      setAllData(previousData);
+    }
+  };
+
+  // İzliyorum <-> Bitti Durumunu Değiştirme (Status Toggle)
+  const durumDegistir = async (showId: number, currentStatus: 'continuing' | 'up_to_date') => {
+    const yeniDurum = currentStatus === 'continuing' ? 'up_to_date' : 'continuing';
+    const previousData = [...allData];
+
+    setAllData(prev =>
+      prev.map(item => {
+        const d_id = Array.isArray(item.shows) ? item.shows[0]?.id : item.shows?.id;
+        if ((d_id || item.show_id) === showId) {
+          return { ...item, status: yeniDurum };
+        }
+        return item;
+      })
+    );
+
+    try {
+      const { error } = await supabase
+        .from('user_shows')
+        .update({ status: yeniDurum })
+        .eq('show_id', showId);
+
+      if (error) throw error;
+    } catch (error) {
+      console.error("Durum güncelleme hatası:", error);
+      setAllData(previousData);
+    }
+  };
+
   const diziAra = async (query: string) => {
     if (!query.trim()) {
       setSearchResults([]);
@@ -142,20 +188,25 @@ export default function Dashboard() {
       setSearchResults(data.results || []);
     } catch (err) {
       console.error("TMDB arama hatası:", err);
-    } finally {
+    } campaigners {
       setSearchLoading(false);
     }
   };
 
-  // Listeye Yeni Dizi Ekleme (Supabase)
   const listeyeEkle = async (tmdbShow: TMDBResult) => {
     try {
+      // TMDB'den detay çekip ortalama bölüm süresini alıyoruz
+      const detailRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbShow.id}?api_key=${TMDB_API_KEY}&language=tr-TR`);
+      const detailData = await detailRes.json();
+      const runtime = detailData.episode_run_time?.[0] || 45; // Süre yoksa varsayılan 45 dk
+
       const { error: showErr } = await supabase
         .from('shows')
         .upsert({
           id: tmdbShow.id,
           title: tmdbShow.name,
-          poster_path: tmdbShow.poster_path
+          poster_path: tmdbShow.poster_path,
+          runtime: runtime // Süreyi de kaydediyoruz
         }, { onConflict: 'id' });
 
       if (showErr) throw showErr;
@@ -184,8 +235,13 @@ export default function Dashboard() {
   const getSeason = (item: UserShow) => Number(item[DB_SEASON_COLUMN] || 0);
   const getShowInfo = (item: UserShow) => Array.isArray(item.shows) ? item.shows[0] : item.shows;
 
+  // --- GELİŞMİŞ DİNAMİK İSTATİSTİK HESABI ---
   const toplamBolum = allData.reduce((acc, item) => acc + getEpisode(item), 0);
-  const toplamSaat = Math.round((toplamBolum * 45) / 60);
+  const toplamSaat = allData.reduce((acc, item) => {
+    const show = getShowInfo(item);
+    const runtime = show?.runtime || 45; // Veritabanında runtime yoksa 45 al
+    return acc + Math.round((getEpisode(item) * runtime) / 60);
+  }, 0);
   const toplamGun = (toplamSaat / 24).toFixed(1);
 
   const continuingCount = allData.filter(item => item.status === 'continuing').length;
@@ -194,14 +250,12 @@ export default function Dashboard() {
 
   if (!mounted) return null;
 
-  // --- EĞER GİRİŞ YAPILMADIYSA ŞİFRE EKRANINI GÖSTER ---
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-[#141414] text-white flex flex-col justify-center items-center px-4 font-sans selection:bg-[#e50914]">
         <form onSubmit={handlePasswordSubmit} className="w-full max-w-sm bg-[#1a1a1a] border border-[#262626] rounded-2xl p-8 shadow-2xl text-center">
           <h2 className="text-[#f5c518] text-2xl font-black tracking-wider mb-2">MY TV TIME</h2>
           <p className="text-gray-400 text-xs uppercase tracking-widest font-bold mb-6">Özel Alan 🎬</p>
-          
           <div className="flex flex-col gap-3">
             <input
               type="password"
@@ -211,28 +265,18 @@ export default function Dashboard() {
               className="w-full bg-[#262626] border border-[#3a3a3a] rounded-xl px-4 py-3 text-sm text-center focus:outline-none focus:border-[#f5c518] text-white transition-colors"
               autoFocus
             />
-            <button
-              type="submit"
-              className="w-full py-3 bg-[#e50914] hover:bg-[#b80710] text-white font-bold text-sm rounded-xl transition-all active:scale-98 shadow-md"
-            >
+            <button type="submit" className="w-full py-3 bg-[#e50914] hover:bg-[#b80710] text-white font-bold text-sm rounded-xl transition-all active:scale-98 shadow-md">
               Giriş Yap
             </button>
           </div>
-
-          {passwordError && (
-            <p className="text-red-500 text-xs font-bold mt-4 animate-pulse">
-              Hatalı şifre! Tekrar deneyin. 🍿
-            </p>
-          )}
+          {passwordError && <p className="text-red-500 text-xs font-bold mt-4 animate-pulse">Hatalı şifre! Tekrar deneyin. 🍿</p>}
         </form>
       </div>
     );
   }
 
-  // --- GİRİŞ BAŞARILIYSA ASIL ARAYÜZÜNÜ GÖSTER ---
   return (
     <div className="min-h-screen bg-[#141414] text-[#e0e0e0] font-sans pb-16 selection:bg-[#f5c518] selection:text-black">
-      {/* Header */}
       <header className="bg-[#1a1a1a]/80 backdrop-blur-md border-b border-[#262626] sticky top-0 z-50">
         <div className="max-w-2xl mx-auto px-4 py-4 flex justify-between items-center">
           <h1 className="text-[#f5c518] text-xl font-black tracking-wider">MY TV TIME</h1>
@@ -247,8 +291,6 @@ export default function Dashboard() {
       </header>
 
       <main className="max-w-2xl mx-auto px-4 mt-6">
-        
-        {/* İstatistik Paneli */}
         <div className="grid grid-cols-3 gap-4 bg-gradient-to-b from-[#1a1a1a] to-[#141414] border border-[#262626] rounded-2xl p-5 mb-8 text-center shadow-lg">
           <div>
             <p className="text-3xl font-black text-[#f5c518]">{loading ? '...' : toplamBolum}</p>
@@ -264,29 +306,18 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Tab Menü */}
         <div className="flex gap-6 border-b border-[#262626] mb-6 text-sm font-medium">
-          <button
-            onClick={() => setCurrentTab('continuing')}
-            className={`pb-3 cursor-pointer transition-all ${currentTab === 'continuing' ? 'text-[#f5c518] border-b-2 border-[#f5c518] font-bold' : 'text-gray-500'}`}
-          >
+          <button onClick={() => setCurrentTab('continuing')} className={`pb-3 cursor-pointer transition-all ${currentTab === 'continuing' ? 'text-[#f5c518] border-b-2 border-[#f5c518] font-bold' : 'text-gray-500'}`}>
             İzliyorum ({continuingCount})
           </button>
-          <button
-            onClick={() => setCurrentTab('up_to_date')}
-            className={`pb-3 cursor-pointer transition-all ${currentTab === 'up_to_date' ? 'text-[#f5c518] border-b-2 border-[#f5c518] font-bold' : 'text-gray-500'}`}
-          >
+          <button onClick={() => setCurrentTab('up_to_date')} className={`pb-3 cursor-pointer transition-all ${currentTab === 'up_to_date' ? 'text-[#f5c518] border-b-2 border-[#f5c518] font-bold' : 'text-gray-500'}`}>
             Bitenler ({upToDateCount})
           </button>
-          <button
-            onClick={() => setCurrentTab('search')}
-            className={`pb-3 cursor-pointer transition-all ml-auto ${currentTab === 'search' ? 'text-[#4ade80] border-b-2 border-[#4ade80] font-bold' : 'text-gray-500 hover:text-gray-300'}`}
-          >
+          <button onClick={() => setCurrentTab('search')} className={`pb-3 cursor-pointer transition-all ml-auto ${currentTab === 'search' ? 'text-[#4ade80] border-b-2 border-[#4ade80] font-bold' : 'text-gray-500 hover:text-gray-300'}`}>
             🔍 Dizi Ekle
           </button>
         </div>
 
-        {/* --- ARAMA SEKME İÇERİĞİ --- */}
         {currentTab === 'search' ? (
           <div className="flex flex-col gap-4">
             <div className="relative">
@@ -298,10 +329,7 @@ export default function Dashboard() {
                 onKeyDown={(e) => e.key === 'Enter' && diziAra(searchQuery)}
                 className="w-full bg-[#1a1a1a] border border-[#262626] rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-[#4ade80] text-white transition-colors"
               />
-              <button 
-                onClick={() => diziAra(searchQuery)}
-                className="absolute right-3 top-2.5 bg-[#262626] hover:bg-[#3a3a3a] text-xs px-3 py-1.5 rounded-lg border border-[#3a3a3a] text-gray-300"
-              >
+              <button onClick={() => diziAra(searchQuery)} className="absolute right-3 top-2.5 bg-[#262626] hover:bg-[#3a3a3a] text-xs px-3 py-1.5 rounded-lg border border-[#3a3a3a] text-gray-300">
                 Ara
               </button>
             </div>
@@ -317,20 +345,13 @@ export default function Dashboard() {
                 {searchResults.map((show) => (
                   <div key={show.id} className="bg-[#1a1a1a] border border-[#262626] rounded-xl p-3 flex gap-4 items-center justify-between">
                     <div className="flex gap-3 items-center min-w-0">
-                      <img 
-                        src={show.poster_path ? `https://image.tmdb.org/t/p/w200${show.poster_path}` : 'https://via.placeholder.com/200x300/1a1a1a/666666?text=Yok'} 
-                        alt={show.name} 
-                        className="w-12 h-18 object-cover rounded-md bg-[#141414]"
-                      />
+                      <img src={show.poster_path ? `https://image.tmdb.org/t/p/w200${show.poster_path}` : 'https://via.placeholder.com/200x300/1a1a1a/666666?text=Yok'} alt={show.name} className="w-12 h-18 object-cover rounded-md bg-[#141414]" />
                       <div className="min-w-0">
                         <h4 className="text-white font-bold text-sm truncate">{show.name}</h4>
                         <p className="text-xs text-gray-500 mt-0.5">{show.first_air_date ? show.first_air_date.split('-')[0] : 'Belirsiz'}</p>
                       </div>
                     </div>
-                    <button
-                      onClick={() => listeyeEkle(show)}
-                      className="px-3 py-1.5 bg-[#4ade80]/10 hover:bg-[#4ade80] text-[#4ade80] hover:text-black font-bold text-xs rounded-lg border border-[#4ade80]/20 transition-all active:scale-95"
-                    >
+                    <button onClick={() => listeyeEkle(show)} className="px-3 py-1.5 bg-[#4ade80]/10 hover:bg-[#4ade80] text-[#4ade80] hover:text-black font-bold text-xs rounded-lg border border-[#4ade80]/20 transition-all active:scale-95">
                       + Takip Et
                     </button>
                   </div>
@@ -339,7 +360,6 @@ export default function Dashboard() {
             )}
           </div>
         ) : (
-          /* --- LİSTE SEKME İÇERİĞİ --- */
           loading ? (
             <div className="flex flex-col items-center justify-center py-16 gap-3">
               <div className="w-8 h-8 border-4 border-[#262626] border-t-[#f5c518] rounded-full animate-spin"></div>
@@ -368,29 +388,38 @@ export default function Dashboard() {
                     
                     <div className="flex-1 min-w-0 py-1">
                       <h3 className="text-white font-bold text-base truncate mb-1.5 group-hover:text-[#f5c518] transition-colors">{d_title}</h3>
-                      <div className="flex items-center gap-2">
-                        <span className="bg-[#262626] px-2 py-0.5 rounded text-xs text-gray-300 font-medium">
-                          {d_season > 0 ? `S${String(d_season).padStart(2, '0')}` : 'S01'}
-                        </span>
-                        <span className="text-sm text-[#f5c518] font-bold">
-                          Bölüm {d_episode}
-                        </span>
+                      <div className="flex items-center gap-4">
+                        {/* Sezon Ayarı */}
+                        <div className="flex items-center bg-[#262626] rounded border border-[#3a3a3a] overflow-hidden">
+                          <button onClick={() => sezonGuncelle(d_id, d_season, -1)} className="px-1.5 py-0.5 text-xs text-gray-400 hover:bg-[#3a3a3a]">-</button>
+                          <span className="px-2 text-xs text-gray-200 font-bold">
+                            {d_season > 0 ? `S${String(d_season).padStart(2, '0')}` : 'S01'}
+                          </span>
+                          <button onClick={() => sezonGuncelle(d_id, d_season, 1)} className="px-1.5 py-0.5 text-xs text-gray-400 hover:bg-[#3a3a3a]">+</button>
+                        </div>
+                        {/* Bölüm Ayarı */}
+                        <div className="flex items-center bg-[#262626] rounded border border-[#3a3a3a] overflow-hidden">
+                          <button onClick={() => bolumGuncelle(d_id, d_episode, -1)} className="px-1.5 py-0.5 text-xs text-gray-400 hover:bg-[#3a3a3a]">-</button>
+                          <span className="px-3 text-sm text-[#f5c518] font-black">
+                            Bölüm {d_episode}
+                          </span>
+                          <button onClick={() => bolumGuncelle(d_id, d_episode, 1)} className="px-1.5 py-0.5 text-xs text-gray-400 hover:bg-[#3a3a3a]">+</button>
+                        </div>
                       </div>
                     </div>
 
-                    <div className="flex-shrink-0 pr-1">
-                      {item.status === 'continuing' ? (
-                        <button
-                          onClick={() => bolumArtir(d_id, d_episode)}
-                          className="flex items-center gap-1.5 px-3 py-2 bg-[#262626] border border-[#3a3a3a] hover:bg-[#f5c518] hover:border-[#f5c518] hover:text-black rounded-lg text-white font-bold text-xs transition-all active:scale-95"
-                        >
-                          + Bölüm
-                        </button>
-                      ) : (
-                        <span className="flex items-center gap-1 text-[#4ade80] text-xs font-bold bg-[#4ade80]/10 px-3 py-2 rounded-lg border border-[#4ade80]/20">
-                          Bitti
-                        </span>
-                      )}
+                    {/* Sağ Taraf: Durum Değiştirme Butonu */}
+                    <div className="flex flex-col gap-2 flex-shrink-0 pr-1 items-end">
+                      <button
+                        onClick={() => durumDegistir(d_id, item.status)}
+                        className={`px-2.5 py-1.5 text-[11px] font-bold rounded-lg border transition-all active:scale-95 ${
+                          item.status === 'continuing'
+                            Check✓ Bitti'
+                            : 'bg-[#f5c518]/10 border-[#f5c518]/20 text-[#f5c518] hover:bg-[#f5c518] hover:text-black'
+                        }`}
+                      >
+                        {item.status === 'continuing' ? '✓ Bitir' : '↺ İzliyorum\'a Al'}
+                      </button>
                     </div>
                   </div>
                 );
