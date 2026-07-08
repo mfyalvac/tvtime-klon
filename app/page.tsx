@@ -43,7 +43,7 @@ interface TMDBEpisode {
   overview: string;
   still_path: string;
   air_date: string;
-  runtime?: number; // DAKİKA ÖZELLİĞİ EKLENDİ
+  runtime?: number;
 }
 
 export default function Dashboard() {
@@ -226,12 +226,12 @@ export default function Dashboard() {
     } catch (err) {} finally { setSearchLoading(false); }
   };
 
-  // --- DİZİ EKLEME MANTIĞI DÜZELTİLDİ ---
+  // --- DİZİ EKLEME MANTIĞI HATALARI DÜZELTİLDİ ---
   const listeyeEkle = async (tmdbShow: TMDBResult) => {
     const zatenEkli = allData.some(item => item.show_id === tmdbShow.id);
     if (zatenEkli) { alert("Bu dizi zaten listende var!"); return; }
 
-    // Hızlı yansıtma (Optimistic UI) - Ekranda bekleme yapmadan anında göster
+    // Hızlı yansıtma (Optimistic UI)
     const newTempShow: any = {
       id: Date.now(),
       show_id: tmdbShow.id,
@@ -244,20 +244,34 @@ export default function Dashboard() {
         poster_path: tmdbShow.poster_path
       }
     };
-    setAllData(prev => [newTempShow, ...prev]);
     
-    // Aramayı temizle ve "İzliyorum" sekmesine at
+    setAllData(prev => [newTempShow, ...prev]);
     setSearchQuery('');
     setSearchResults([]);
     setCurrentTab('continuing');
 
     try {
-      await supabase.from('shows').upsert({ id: tmdbShow.id, title: tmdbShow.name, poster_path: tmdbShow.poster_path }, { onConflict: 'id' });
-      await supabase.from('user_shows').insert({ show_id: tmdbShow.id, status: 'continuing', [DB_EPISODE_COLUMN]: 0, [DB_SEASON_COLUMN]: 1 });
+      // Hataları yakalayabilmek için açık açık throw error yaptık.
+      const { error: showErr } = await supabase
+        .from('shows')
+        .upsert({ id: tmdbShow.id, title: tmdbShow.name, poster_path: tmdbShow.poster_path }, { onConflict: 'id' });
       
-      // Arka planda verileri güvenli şekilde güncelle
-      await verileriGetir();
-    } catch (err: any) { alert("Dizi eklenirken hata oluştu."); }
+      if (showErr) throw showErr;
+
+      const { error: userShowErr } = await supabase
+        .from('user_shows')
+        .insert({ show_id: tmdbShow.id, status: 'continuing', [DB_EPISODE_COLUMN]: 0, [DB_SEASON_COLUMN]: 1 });
+      
+      if (userShowErr) throw userShowErr;
+
+      // Hata yoksa son verileri düzgünce getir
+      verileriGetir();
+    } catch (err: any) { 
+      console.error("DİZİ EKLEME HATASI:", err);
+      alert("Dizi eklenemedi! Lütfen konsoldaki hataya bakın. (Eğer RLS hatasıysa Supabase'den kapatmanız gerekir)");
+      // Eklenemediyse sahte veriyi ekrandan sil (Eski haline döndür)
+      setAllData(prev => prev.filter(item => item.show_id !== tmdbShow.id));
+    }
   };
 
   const getEpisode = (item: UserShow) => Number(item[DB_EPISODE_COLUMN] || 0);
@@ -336,7 +350,6 @@ export default function Dashboard() {
                   <span className="text-gray-400">•</span>
                   <span className="text-gray-300">{selectedShow.number_of_seasons} Sezon</span>
                   
-                  {/* ORTALAMA BÖLÜM SÜRESİ EKLENDİ */}
                   {(selectedShow.episode_run_time?.[0] || selectedShow.last_episode_to_air?.runtime) > 0 && (
                     <>
                       <span className="text-gray-400">•</span>
@@ -386,7 +399,6 @@ export default function Dashboard() {
                       </p>
                       <span className="text-[10px] text-gray-600 block mt-1 font-medium">
                         {ep.air_date ? ep.air_date.split('-').reverse().join('.') : 'Bilinmeyen Tarih'}
-                        {/* HER BÖLÜMÜN KENDİ SÜRESİ EKLENDİ */}
                         {ep.runtime ? ` • ⏳ ${ep.runtime} dk` : ''}
                       </span>
                     </div>
