@@ -43,6 +43,7 @@ interface TMDBEpisode {
   overview: string;
   still_path: string;
   air_date: string;
+  runtime?: number; // DAKİKA ÖZELLİĞİ EKLENDİ
 }
 
 export default function Dashboard() {
@@ -117,12 +118,10 @@ export default function Dashboard() {
     setSeasonDetails(null);
     
     try {
-      // Dizinin Genel Bilgileri (Sezon sayısı, özet vb.)
       const res = await fetch(`https://api.themoviedb.org/3/tv/${showId}?api_key=${TMDB_API_KEY}&language=tr-TR`);
       const showData = await res.json();
       setSelectedShow(showData);
       
-      // İzlediği veya 1. Sezonun Bölümleri
       const targetSeason = currentSeason > 0 ? currentSeason : 1;
       setSelectedSeason(targetSeason);
       await fetchSeasonDetails(showId, targetSeason);
@@ -153,10 +152,9 @@ export default function Dashboard() {
     }
   };
 
-
   // --- DİĞER FONKSİYONLAR ---
   const bolumArtir = async (e: React.MouseEvent, showId: number, currentEp: number) => {
-    e.stopPropagation(); // Kartın içine girmeyi engelle
+    e.stopPropagation(); 
     const yeniBolum = currentEp + 1;
     const previousData = [...allData];
 
@@ -171,10 +169,7 @@ export default function Dashboard() {
     );
 
     try {
-      const { error } = await supabase
-        .from('user_shows')
-        .update({ [DB_EPISODE_COLUMN]: yeniBolum })
-        .eq('show_id', showId);
+      const { error } = await supabase.from('user_shows').update({ [DB_EPISODE_COLUMN]: yeniBolum }).eq('show_id', showId);
       if (error) throw error;
     } catch (error) {
       setAllData(previousData);
@@ -231,17 +226,37 @@ export default function Dashboard() {
     } catch (err) {} finally { setSearchLoading(false); }
   };
 
+  // --- DİZİ EKLEME MANTIĞI DÜZELTİLDİ ---
   const listeyeEkle = async (tmdbShow: TMDBResult) => {
     const zatenEkli = allData.some(item => item.show_id === tmdbShow.id);
     if (zatenEkli) { alert("Bu dizi zaten listende var!"); return; }
 
+    // Hızlı yansıtma (Optimistic UI) - Ekranda bekleme yapmadan anında göster
+    const newTempShow: any = {
+      id: Date.now(),
+      show_id: tmdbShow.id,
+      status: 'continuing',
+      [DB_EPISODE_COLUMN]: 0,
+      [DB_SEASON_COLUMN]: 1,
+      shows: {
+        id: tmdbShow.id,
+        title: tmdbShow.name,
+        poster_path: tmdbShow.poster_path
+      }
+    };
+    setAllData(prev => [newTempShow, ...prev]);
+    
+    // Aramayı temizle ve "İzliyorum" sekmesine at
+    setSearchQuery('');
+    setSearchResults([]);
+    setCurrentTab('continuing');
+
     try {
       await supabase.from('shows').upsert({ id: tmdbShow.id, title: tmdbShow.name, poster_path: tmdbShow.poster_path }, { onConflict: 'id' });
       await supabase.from('user_shows').insert({ show_id: tmdbShow.id, status: 'continuing', [DB_EPISODE_COLUMN]: 0, [DB_SEASON_COLUMN]: 1 });
-      verileriGetir();
-      setCurrentTab('continuing');
-      setSearchQuery('');
-      setSearchResults([]);
+      
+      // Arka planda verileri güvenli şekilde güncelle
+      await verileriGetir();
     } catch (err: any) { alert("Dizi eklenirken hata oluştu."); }
   };
 
@@ -261,7 +276,7 @@ export default function Dashboard() {
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-[#141414] text-white flex flex-col justify-center items-center px-4 font-sans">
-        <form onSubmit={handlePasswordSubmit} className="w-full max-w-sm bg-[#1a1a1a] border border-[#262626] rounded-2xl p-8 text-center">
+        <form onSubmit={handlePasswordSubmit} className="w-full max-w-sm bg-[#1a1a1a] border border-[#262626] rounded-2xl p-8 text-center shadow-2xl">
           <h2 className="text-[#f5c518] text-2xl font-black tracking-wider mb-2">MY TV TIME</h2>
           <p className="text-gray-400 text-xs uppercase tracking-widest font-bold mb-6">Özel Alan 🎬</p>
           <div className="flex flex-col gap-3">
@@ -278,7 +293,7 @@ export default function Dashboard() {
     <div className="min-h-screen bg-[#141414] text-[#e0e0e0] font-sans pb-16 selection:bg-[#f5c518] selection:text-black">
       <header className="bg-[#1a1a1a]/80 backdrop-blur-md border-b border-[#262626] sticky top-0 z-50">
         <div className="max-w-2xl mx-auto px-4 py-4 flex justify-between items-center">
-          <h1 className="text-[#f5c518] text-xl font-black tracking-wider">MY TV TIME</h1>
+          <h1 className="text-[#f5c518] text-xl font-black tracking-wider cursor-pointer" onClick={() => { setSelectedShow(null); setCurrentTab('continuing'); }}>MY TV TIME</h1>
           <span className="text-xs bg-[#262626] text-emerald-400 px-3 py-1.5 rounded-full border border-[#3a3a3a] font-medium flex items-center gap-1.5 shadow-sm">
             <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span></span>
             Sistem Hazır
@@ -288,7 +303,6 @@ export default function Dashboard() {
 
       <main className="max-w-2xl mx-auto px-4 mt-6 relative">
         
-        {/* YÜKLENİYOR (Detay sayfası için) */}
         {detailLoading && (
           <div className="absolute inset-0 bg-[#141414] z-10 flex flex-col items-center justify-center pt-20 gap-3 min-h-[500px]">
              <div className="w-8 h-8 border-4 border-[#262626] border-t-[#f5c518] rounded-full animate-spin"></div>
@@ -296,7 +310,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* --- DETAY SAYFASI GÖRÜNÜMÜ --- */}
+        {/* --- DETAY SAYFASI --- */}
         {!detailLoading && selectedShow ? (
           <div className="animate-fade-in pb-10">
             <button 
@@ -306,22 +320,31 @@ export default function Dashboard() {
               ⬅ Geri Dön
             </button>
             
-            {/* Dizi Hero Alanı */}
             <div className="relative w-full h-48 md:h-64 rounded-2xl overflow-hidden mb-6 border border-[#262626]">
               <img 
                 src={selectedShow.backdrop_path ? `https://image.tmdb.org/t/p/w780${selectedShow.backdrop_path}` : `https://image.tmdb.org/t/p/w500${selectedShow.poster_path}`} 
                 className="w-full h-full object-cover opacity-60" 
                 alt={selectedShow.name} 
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-[#141414] via-transparent to-transparent"></div>
+              <div className="absolute inset-0 bg-gradient-to-t from-[#141414] via-[#141414]/50 to-transparent"></div>
               <div className="absolute bottom-4 left-4 right-4">
                 <h2 className="text-3xl font-black text-white drop-shadow-md">{selectedShow.name}</h2>
-                <div className="flex gap-2 items-center mt-2 text-xs font-bold">
+                <div className="flex flex-wrap gap-2 items-center mt-2 text-xs font-bold">
                   <span className="text-[#f5c518]">⭐ {Number(selectedShow.vote_average).toFixed(1)}</span>
                   <span className="text-gray-400">•</span>
                   <span className="text-gray-300">{selectedShow.first_air_date?.split('-')[0]}</span>
                   <span className="text-gray-400">•</span>
                   <span className="text-gray-300">{selectedShow.number_of_seasons} Sezon</span>
+                  
+                  {/* ORTALAMA BÖLÜM SÜRESİ EKLENDİ */}
+                  {(selectedShow.episode_run_time?.[0] || selectedShow.last_episode_to_air?.runtime) > 0 && (
+                    <>
+                      <span className="text-gray-400">•</span>
+                      <span className="text-gray-300 bg-[#262626] px-2 py-0.5 rounded-md border border-[#3a3a3a]">
+                        ~{selectedShow.episode_run_time?.[0] || selectedShow.last_episode_to_air?.runtime} dk
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
             </div>
@@ -330,7 +353,6 @@ export default function Dashboard() {
               {selectedShow.overview || "Bu dizi için henüz bir özet bulunmuyor."}
             </p>
 
-            {/* Sezon Seçici */}
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold text-white">Bölümler</h3>
               <select 
@@ -346,7 +368,6 @@ export default function Dashboard() {
               </select>
             </div>
 
-            {/* Bölüm Listesi */}
             {!seasonDetails ? (
               <div className="text-center py-10 text-gray-500 text-sm">Bölümler Yükleniyor...</div>
             ) : (
@@ -363,7 +384,11 @@ export default function Dashboard() {
                       <p className="text-xs text-gray-500 mt-1 line-clamp-2">
                         {ep.overview || "Özet bulunmuyor."}
                       </p>
-                      <span className="text-[10px] text-gray-600 block mt-1">{ep.air_date ? ep.air_date.split('-').reverse().join('.') : 'Bilinmeyen Tarih'}</span>
+                      <span className="text-[10px] text-gray-600 block mt-1 font-medium">
+                        {ep.air_date ? ep.air_date.split('-').reverse().join('.') : 'Bilinmeyen Tarih'}
+                        {/* HER BÖLÜMÜN KENDİ SÜRESİ EKLENDİ */}
+                        {ep.runtime ? ` • ⏳ ${ep.runtime} dk` : ''}
+                      </span>
                     </div>
                   </div>
                 ))}
@@ -371,7 +396,7 @@ export default function Dashboard() {
             )}
           </div>
         ) : (
-          /* --- ANA LİSTE GÖRÜNÜMÜ --- */
+          /* --- ANA LİSTE --- */
           <div className={detailLoading ? "hidden" : "block"}>
             <div className="grid grid-cols-3 gap-4 bg-gradient-to-b from-[#1a1a1a] to-[#141414] border border-[#262626] rounded-2xl p-5 mb-8 text-center shadow-lg">
               <div>
@@ -395,15 +420,15 @@ export default function Dashboard() {
             </div>
 
             {currentTab === 'search' ? (
-              <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-4 animate-fade-in">
                 <div className="relative">
-                  <input type="text" placeholder="Dizi adı yazın ve enter'a basın..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && diziAra(searchQuery)} className="w-full bg-[#1a1a1a] border border-[#262626] rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-[#4ade80] text-white transition-colors" />
+                  <input type="text" placeholder="Dizi adı yazın ve enter'a basın..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && diziAra(searchQuery)} className="w-full bg-[#1a1a1a] border border-[#262626] rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-[#4ade80] text-white transition-colors" autoFocus />
                   <button onClick={() => diziAra(searchQuery)} className="absolute right-3 top-2.5 bg-[#262626] hover:bg-[#3a3a3a] text-xs px-3 py-1.5 rounded-lg border border-[#3a3a3a] text-gray-300">Ara</button>
                 </div>
                 {searchLoading ? <div className="text-center py-8 text-gray-500 text-sm">Aranıyor...</div> : searchResults.length === 0 ? <div className="text-center py-12 bg-[#1a1a1a]/30 rounded-2xl border border-dashed border-[#262626] text-gray-500 text-sm">Keşfetmek için bir dizi aratın.</div> : (
                   <div className="grid grid-cols-1 gap-3">
                     {searchResults.map((show) => (
-                      <div key={show.id} className="bg-[#1a1a1a] border border-[#262626] rounded-xl p-3 flex gap-4 items-center justify-between">
+                      <div key={show.id} className="bg-[#1a1a1a] border border-[#262626] rounded-xl p-3 flex gap-4 items-center justify-between hover:border-[#3a3a3a] transition-colors">
                         <div className="flex gap-3 items-center min-w-0">
                           <img src={show.poster_path ? `https://image.tmdb.org/t/p/w200${show.poster_path}` : 'https://via.placeholder.com/200x300/1a1a1a/666666?text=Yok'} alt={show.name} className="w-12 h-18 object-cover rounded-md bg-[#141414]" />
                           <div className="min-w-0">
@@ -411,7 +436,7 @@ export default function Dashboard() {
                             <p className="text-xs text-gray-500 mt-0.5">{show.first_air_date ? show.first_air_date.split('-')[0] : 'Belirsiz'}</p>
                           </div>
                         </div>
-                        <button onClick={() => listeyeEkle(show)} className="px-3 py-1.5 bg-[#4ade80]/10 hover:bg-[#4ade80] text-[#4ade80] hover:text-black font-bold text-xs rounded-lg border border-[#4ade80]/20 transition-all active:scale-95">+ Takip Et</button>
+                        <button onClick={() => listeyeEkle(show)} className="px-3 py-1.5 bg-[#4ade80]/10 hover:bg-[#4ade80] text-[#4ade80] hover:text-black font-bold text-xs rounded-lg border border-[#4ade80]/20 transition-all active:scale-95 whitespace-nowrap">+ Ekle</button>
                       </div>
                     ))}
                   </div>
@@ -437,7 +462,7 @@ export default function Dashboard() {
                       <div 
                         key={item.id || d_id} 
                         onClick={() => handleShowClick(d_id, d_season)}
-                        className="relative bg-[#1a1a1a] border border-[#262626] rounded-xl p-3 flex gap-4 items-center shadow-md hover:border-[#3a3a3a] transition-colors group cursor-pointer"
+                        className="relative bg-[#1a1a1a] border border-[#262626] rounded-xl p-3 flex gap-4 items-center shadow-md hover:border-[#3a3a3a] transition-colors group cursor-pointer animate-fade-in"
                       >
                         <img src={imgUrl} alt={d_title} className="w-16 h-24 object-cover rounded-lg border border-[#262626] flex-shrink-0 bg-[#141414]" loading="lazy" />
                         
@@ -459,7 +484,7 @@ export default function Dashboard() {
                             <span className="flex items-center gap-1 text-[#4ade80] text-xs font-bold bg-[#4ade80]/10 px-3 py-2 rounded-lg border border-[#4ade80]/20">Bitti</span>
                           )}
                           
-                          <button onClick={(e) => { e.stopPropagation(); setActiveMenuId(isMenuOpen ? null : d_id); }} className="text-gray-500 hover:text-white text-xs px-2 py-1 bg-[#262626] rounded border border-[#3a3a3a]">⚙️ Ayarlar</button>
+                          <button onClick={(e) => { e.stopPropagation(); setActiveMenuId(isMenuOpen ? null : d_id); }} className="text-gray-500 hover:text-white text-xs px-2 py-1 bg-[#262626] rounded border border-[#3a3a3a] transition-colors">⚙️ Ayarlar</button>
                         </div>
 
                         {isMenuOpen && (
